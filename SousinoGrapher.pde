@@ -32,8 +32,8 @@ void draw() {
   
   values[0] = 1;
   values[1] = 60;
-  values[2] = random(50, 70);
   
+  values[2] = map(posX, 0, width, 20, 80);
   drawPlot(values);
 }
 
