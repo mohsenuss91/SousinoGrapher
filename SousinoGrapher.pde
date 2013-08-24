@@ -6,31 +6,28 @@ color markerLabelColor = color(80);
 
 color targetColor = color(31, 255, 31);
 color inputColor = color(255, 255, 31);
-color tuningColor = color(255, 31, 31);
+color outputColor = color(255, 31, 255);
 
 Serial port;
+Table table;
 
-PGraphics panel;
-PGraphics chart;
-PGraphics chartBackground;
+int panelTop = 25;
+int panelLeft = 20;
 
-int paddingX = 40;
-int paddingY = 25;
-int chartX = 0; // Current chart drawing position (incremented each time data is plotted)
-int viewportX = 0; // Viewport offset
+int chartTop = 100;
+int chartLeft = 40;
+int chartRight = chartLeft;
+int chartBottom = 25;
 
-int startTime; // When we ran the sketch
-
-int markerTime;
-int markerInterval = 10000;
+int viewportX = 0;
 
 int simulationTime;
 int simulationInterval = 10;
-
-int tailTimeout = 3000; // How long after releasing the mouse we should start tailing again
+boolean simulating = false;
 
 int mousePressX = 0;
 int mouseReleaseTime;
+int tailTimeout = 3000; // How long after releasing the mouse we should start tailing again
 
 boolean dragging;
 boolean tail = true; // If we should keep up with the chart position
@@ -38,79 +35,114 @@ boolean tail = true; // If we should keep up with the chart position
 void setup() {
   size(640, 480);
 
-  /*
-  port = new Serial(this, Serial.list()[0], 9600);
-  port.bufferUntil('\n');
-  */
+  table = new Table();
+  table.addColumn("Time");
+  table.addColumn("Target");
+  table.addColumn("Input");
+  table.addColumn("Output");
 
-  startTime = millis();
-
-  panel = createGraphics(width, 100);
-  chart = createGraphics(width * 10, height - panel.height); 
-  chartBackground = createGraphics(width, chart.height); 
-
-  drawChartBackground();
-  simulationEvent();
+  try {
+    port = new Serial(this, Serial.list()[0], 9600);
+    port.bufferUntil('\n');
+  } catch (ArrayIndexOutOfBoundsException e) {
+    simulating = true;
+    simulationEvent();
+  }
 }
 
 void draw() {
-  background(backgroundColor);  
-  image(panel, 0, 0);
-  image(chartBackground, 0, panel.height - 5);
-  copy(chart, viewportX, 0, width - (paddingX * 2), height, paddingX, panel.height, width - (paddingX * 2), height);
-  
-  if (markerTime + markerInterval < millis()) {
-    markerTime = millis();    
-    markerEvent();
-  }
-  
-  if (simulationTime + simulationInterval < millis()) {
+  background(backgroundColor);
+
+  // Simulation
+  if (simulating && simulationTime + simulationInterval < millis()) {
     simulationTime = millis();
     simulationEvent();
-  }
-  
+  }  
+
+  // Mouse drag timeout
   if (mouseReleaseTime > 0 && mouseReleaseTime + tailTimeout < millis()) {
     dragTimeoutEvent();
+  }
+
+  int rows = table.getRowCount();
+
+  // Tail
+  if (tail && rows > width) {
+    viewportX = rows - width - 1;
+  }  
+
+  // Panel
+  TableRow lastRow = table.getRow(rows - 1);
+
+  textAlign(LEFT);
+
+  fill(targetColor);
+  text(String.format("Target: %.1f°", lastRow.getFloat("Target")), panelLeft, panelTop);
+
+  fill(inputColor);
+  text(String.format("Input: %.1f°", lastRow.getFloat("Input")), panelLeft, panelTop + 20);
+
+  fill(outputColor);
+  text(String.format("Output: %.1f", lastRow.getFloat("Output")), panelLeft, panelTop + 40);
+
+  stroke(markerColor);
+  fill(markerLabelColor);
+  textAlign(RIGHT);  
+
+  for (int i = 0; i <= 10; i = i + 1) {
+    float y = map(i, 0, 10, height - chartBottom, chartTop);
+
+    line(chartLeft, y, width, y);
+    text(String.format("%d°", i * 10), 35, y + 5);
+  }
+
+  // Chart
+  for (int x = 0; x < min(rows - viewportX - 1, width); x = x + 1) {
+    TableRow row = table.getRow(viewportX + x);
+
+    // Target
+    stroke(targetColor);
+    point(chartLeft + x, map(row.getFloat("Target"), 100, 0, chartTop, height - chartBottom));
+
+    // Input
+    stroke(inputColor);
+    point(chartLeft + x, map(row.getFloat("Input"), 100, 0, chartTop, height - chartBottom));
+
+    // Output
+    stroke(outputColor);
+    point(chartLeft + x, map(row.getFloat("Output"), 100, 0, chartTop, height - chartBottom));
   }
 }
 
 void simulationEvent() {
-  float[] values = new float[4];
+  TableRow row = table.addRow();
+  row.setInt("Time", millis());
+  row.setFloat("Target", 60);
+  row.setFloat("Input", map(sin(table.getRowCount()), 0, width, 20, 80));
+  row.setFloat("Output", map(sin(table.getRowCount()), 0, width, 0, 100));
 
-  // Cooking
-  values[0] = 1;
-  values[1] = 60;
-  values[2] = map(chartX, 0, width, 20, 80);
-
-  // Tuning
-  /*
-  values[0] = 2;
-  */
-  
-  // Simulation
-  /*
-  values[0] = 3;
-  values[1] = 10;
-  values[2] = 30;
-  values[3] = 70;
-  */
-
-  drawChart(values);
+  table.addRow(row);
 }
 
 void serialEvent(Serial port) {
   String data = port.readStringUntil('\n');
 
   if (data != null) {
-    drawChart(float(splitTokens(data, ",")));
+    // {Target,T,55.00}
+    String type = data.substring(1, data.indexOf(","));
+    float value = float(data.substring(data.lastIndexOf(",") + 1, data.length() - 1));
+    TableRow row = type == "Target" ? table.addRow() : table.getRow(table.getRowCount() - 1);
+
+    row.setFloat(type, value);
   }
 }
 
+/*
 void markerEvent() {
-  int diff = (millis() - startTime) / 1000;
-  int minutes = floor(diff / 3600);
-  int seconds = floor(diff % (3600 / 60));
-
+  int diff = millis() - startTime;
+  int seconds = (diff / 1000) % 60;
+  int minutes = diff / 1000 / 60; 
+ 
   chart.beginDraw();
   chart.fill(markerLabelColor);
   chart.stroke(markerColor);
@@ -119,6 +151,7 @@ void markerEvent() {
   chart.text(String.format("%02d:%02d", minutes, seconds), chartX - 18, paddingY - 10);
   chart.endDraw();
 }
+*/
 
 void dragTimeoutEvent() {
   tail = true;
@@ -134,83 +167,10 @@ void mousePressed() {
 }
 
 void mouseDragged() {
-  viewportX = max(0, mouseX + mousePressX);
+  viewportX = max(0, min(table.getRowCount() - 1, mouseX + mousePressX));
 }
 
 void mouseReleased() {
   dragging = false; 
   mouseReleaseTime = millis();
 }
-
-void drawChartBackground() {
-  chartBackground.beginDraw();
-  chartBackground.stroke(markerColor);
-  chartBackground.fill(markerLabelColor);
-  chartBackground.textAlign(RIGHT);  
-
-  for (int i = 0; i <= 10; i = i + 1) {
-    float y = map(i, 0, 10, chartBackground.height - paddingY, paddingY);
-
-    chartBackground.line(paddingX, y, chartBackground.width - paddingX, y);
-    chartBackground.text(String.format("%d°", i * 10), paddingX - 5, y + 5);
-  }
-
-  chartBackground.endDraw();  
-}
-
-void drawChart(float[] values) {
-  float type = values[0];
-
-  // Cooking or tuning
-  if (type == 1 || type == 2) { // Cooking
-    float target = values[1];
-    float input = values[2];
-
-    // Panel
-    panel.clear();
-    panel.beginDraw();
-    
-    panel.fill(targetColor);
-    panel.text(String.format("Target: %.1f°", target), 20, paddingY);
-
-    panel.fill(inputColor);
-    panel.text(String.format("Input: %.1f°", input), 20, paddingY + 20);
-
-    if (type == 2) {
-      panel.fill(tuningColor);
-      panel.text("Tuning...", 20, paddingY + 40);     
-    }
-    
-    panel.endDraw();
-
-    // Plot values
-    chart.beginDraw();
-    chart.stroke(targetColor);
-    chart.point(chartX, map(target, 100, 0, 0, chart.height));
-
-    // Input
-    chart.stroke(inputColor);
-    chart.point(chartX, map(input, 100, 0, 0, chart.height));
-    chart.endDraw();
-
-    chartX++;
-
-    if (tail && chartX > chartBackground.width - (paddingX * 2)) {
-      viewportX = chartX - chartBackground.width + (paddingX * 2);
-    }
-    
-    // Tuning
-  } else if (type == 3) { // Tuning complete
-    float kP = values[1];
-    float kI = values[2];
-    float kD = values[3];
-    
-    chart.beginDraw();    
-    chart.fill(tuningColor);
-    chart.stroke(tuningColor);
-    chart.line(chartX, paddingY, chartX, chart.height - paddingY);
-    chart.text(String.format("Tuning complete, kP: %.2f, kI: %.2f, kD: %.2f", kP, kI, kD), chartX - 5, chart.height - 10);
-    chart.endDraw();   
-  }
-}
-
